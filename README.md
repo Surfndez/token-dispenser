@@ -42,6 +42,11 @@ and tokens for **checkin requests** at http://server-address:port/token-ac2dm/em
 #### with gplaycli
 gplaycli requires also the GSFid. Token and GSFid can be retrieved using http://server-adress:port/email/gsfid. A random couple (login, password) will be fetched from the provided ones, to load balance over multiple accounts, mitigating account ban possibilities.
 
+#### multi google account
+To use gplaycli it's better to have several gmail accounts. You can create them on google web interface (may be with the same password, it not really important). You have to put the couple account/password in the passwords/passwords.lst file.
+
+Then you MUST activate these accounts. You can use your Androidu© device or the Android Studio emulator. Just wipe all data after each activation.
+
 ### Credits
 
 * [play-store-api](https://github.com/yeriomin/play-store-api)
