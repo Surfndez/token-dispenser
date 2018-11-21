@@ -2,17 +2,13 @@ package com.github.yeriomin.tokendispenser;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import spark.Request;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.util.Properties;
+import java.util.*;
 
-import static spark.Spark.after;
-import static spark.Spark.before;
-import static spark.Spark.get;
-import static spark.Spark.ipAddress;
-import static spark.Spark.notFound;
-import static spark.Spark.port;
+import static spark.Spark.*;
 
 public class Server {
 
@@ -31,11 +27,39 @@ public class Server {
     static final String PROPERTY_MONGODB_DB = "mongodb-databaseNameStorage";
     static final String PROPERTY_MONGODB_COLLECTION = "mongodb-collectionName";
     static final String PROPERTY_EMAIL_RETRIEVAL = "enable-email-retrieval";
+    static final String PROPERTY_RATE_LIMITING = "rate-limiting";
+    static final String PROPERTY_RATE_LIMITING_MAX_REQUESTS = "rate-limiting-max-requests";
+    static final String PROPERTY_RATE_LIMITING_CONTROL_PERIOD = "rate-limiting-control-period";
+    static final String PROPERTY_RATE_LIMITING_EXPOSE_STATS_ENDPOINT = "rate-limiting-expose-stats-endpoint";
+    static final String PROPERTY_RATE_LIMITING_DEBUG = "rate-limiting-debug";
 
     static public final String STORAGE_MONGODB = "mongodb";
     static public final String STORAGE_PLAINTEXT = "plaintext";
 
     static PasswordsDbInterface passwords;
+    static StatsStorage stats;
+
+    static long getIp(Request request) {
+        String requestIp = request.headers("X-Forwarded-For");
+        return ipToLong((null == requestIp || requestIp.isEmpty()) ? request.ip() : requestIp);
+    }
+
+    private static long ipToLong(String address) {
+        String[] split = address.split("\\.");
+        if (split.length < 4) {
+            return 0;
+        }
+        long result = 0;
+        for (int i = 0; i < split.length; i++) {
+            int power = 3 - i;
+            result += (Integer.parseInt(split[i])%256 * Math.pow(256,power));
+        }
+        return result;
+    }
+
+    static String longToIp(long ip) {
+        return ((ip >> 24 ) & 0xFF) + "." + ((ip >> 16 ) & 0xFF) + "." + ((ip >> 8 ) & 0xFF) + "." + (ip & 0xFF);
+    }
 
     public static void main(String[] args) {
         Properties config = getConfig();
@@ -46,6 +70,13 @@ public class Server {
             host = hostDiy;
             port = Integer.parseInt(System.getenv("OPENSHIFT_DIY_PORT"));
         }
+        try {
+            port = Integer.parseInt(System.getenv("PORT"));
+        } catch (NumberFormatException e) {
+            // Apparently, environment is not heroku
+        }
+        // Google auth requests are not fast, so lets limit max simultaneous threads
+        threadPool(16, 2, 5000);
         ipAddress(host);
         port(port);
         notFound("Not found");
@@ -59,8 +90,23 @@ public class Server {
         get("/token/email/:email", (req, res) -> new TokenResource().handle(req, res));
         get("/token-ac2dm/email/:email", (req, res) -> new TokenAc2dmResource().handle(req, res));
         if (config.getProperty(PROPERTY_EMAIL_RETRIEVAL, "false").equals("true")) {
+            LOG.info("Exposing /email endpoint");
             get("/email", (req, res) -> new EmailResource().handle(req, res));
             get("/email/gsfid", (req, res) -> new TokenAc2dmGsfIdResource().handle(req, res));
+        }
+        if (config.getProperty(PROPERTY_RATE_LIMITING, "false").equals("true")) {
+            LOG.info("Enabling rate limiting");
+            stats = config.getProperty(PROPERTY_RATE_LIMITING_DEBUG, "false").equals("true")
+                ? new DebugStatsStorage()
+                : new ReleaseStatsStorage()
+            ;
+            if (config.getProperty(PROPERTY_RATE_LIMITING_EXPOSE_STATS_ENDPOINT, "false").equals("true")) {
+                LOG.info("Exposing /stats endpoint");
+                get("/stats", (req, res) -> new StatsResource().get(req, res));
+                delete("/stats", (req, res) -> new StatsResource().delete(req, res));
+            }
+            stats.setRateLimitControlPeriod(Integer.parseInt(config.getProperty(PROPERTY_RATE_LIMITING_CONTROL_PERIOD, "300000")));
+            stats.setRateLimitRequests(Integer.parseInt(config.getProperty(PROPERTY_RATE_LIMITING_MAX_REQUESTS, "20")));
         }
     }
 
